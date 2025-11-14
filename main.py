@@ -13,31 +13,37 @@ from handlers.cart import router as cart_router
 from handlers.admin import router as admin_router
 from handlers.back_handler import router as back_router
 from handlers.unknown import router as unknown_router
+from handlers.orders import router as orders_router  # ✅ Buyurtmalar routerini qo'shamiz
 
 # Loggerni sozlash
 logging.basicConfig(level=logging.INFO)
 
 async def main():
-    # Ma'lumotlar bazasini ishga tushirish
-    init_db()
-    
-    # Boshlang'ich ma'lumotlarni qo'shish
-    init_categories()
-    
-    # Bot va dispatcher yaratish
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-    
-    # Routerlarni qo'shish (tartib muhim)
-    dp.include_router(start_router)
-    dp.include_router(categories_router)
-    dp.include_router(cart_router)
-    dp.include_router(admin_router)
-    dp.include_router(back_router)
-    dp.include_router(unknown_router)  # Eng oxiriga
-    
-    # Botni ishga tushirish
-    await dp.start_polling(bot)
+    try:
+        # Ma'lumotlar bazasini ishga tushirish
+        init_db()
+        
+        # Boshlang'ich ma'lumotlarni qo'shish
+        init_categories()
+        
+        # Bot va dispatcher yaratish
+        bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        dp = Dispatcher()
+        
+        # Routerlarni qo'shish (tartib muhim)
+        dp.include_router(start_router)
+        dp.include_router(categories_router)
+        dp.include_router(cart_router)
+        dp.include_router(admin_router)
+        dp.include_router(orders_router)  # ✅ Buyurtmalar routerini qo'shamiz
+        dp.include_router(back_router)
+        dp.include_router(unknown_router)  # Eng oxiriga
+        
+        print("Bot ishga tushmoqda...")
+        # Botni ishga tushirish
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"Botni ishga tushirishda xatolik: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

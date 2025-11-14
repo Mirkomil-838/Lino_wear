@@ -15,10 +15,10 @@ def get_main_menu():
         resize_keyboard=True
     )
 
-def get_subscription_check_keyboard():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url="https://t.me/lino_wear_official")],
-            [InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="check_subscription")]
-        ]
-    )
+# def get_subscription_check_keyboard():
+#     return InlineKeyboardMarkup(
+#         inline_keyboard=[
+#             [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url="https://t.me/lino_wear_official")],
+#             [InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="check_subscription")]
+#         ]
+#     )
