@@ -2,8 +2,8 @@ from aiogram.fsm.state import State, StatesGroup
 
 class UserStates(StatesGroup):
     main_menu = State()
-    choosing_category = State()
-    choosing_subcategory = State()
+    choosing_main_category = State()    # ✅ Yangi: Asosiy kategoriya tanlash
+    choosing_subcategory = State()      # ✅ Yangi: Subkategoriya tanlash
     viewing_products = State()
     choosing_product = State()
     choosing_color = State()
@@ -31,6 +31,6 @@ class AdminStates(StatesGroup):
     adding_custom_size = State()
     broadcasting_message = State()
     confirming_broadcast = State()
-    # ✅ Yangi: Mahsulotlarni boshqarish
+    # ✅ YANGI: Mahsulotlarni boshqarish state'lari qo'shildi
     managing_products = State()
     deleting_product = State()

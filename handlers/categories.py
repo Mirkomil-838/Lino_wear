@@ -1,77 +1,196 @@
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from database.db import get_db
 from database.models import Category, Product, CartItem, User
-from keyboards.categories import get_categories_keyboard, get_products_keyboard
+from keyboards.categories import (
+    get_main_categories_keyboard,
+    get_subcategories_keyboard, 
+    get_products_keyboard,
+    get_color_selection_keyboard,
+    get_size_selection_keyboard
+)
 from keyboards.cart import get_cart_keyboard
-from keyboards.admin import get_color_selection_keyboard, get_size_selection_keyboard
 from keyboards.main_menu import get_main_menu
 from utils.states import UserStates
-from sqlalchemy.orm import Session
 
 router = Router()
 
-# Optom bo'limini ochish
-@router.message(F.text == "🛍 Optom")
-async def show_categories(message: Message, state: FSMContext):
+# Kategoriya bo'limini ochish
+@router.message(F.text == "🛍 Kategoriya")
+async def show_main_categories(message: Message, state: FSMContext):
     db = next(get_db())
-    await message.answer(
-        "🏪 Do'konimizdagi kategoriyalar:\n\n"
-        "Quyidagi kategoriyalardan birini tanlang:",
-        reply_markup=get_categories_keyboard(db)
-    )
-    await state.set_state(UserStates.choosing_category)
-
-# Kategoriya tanlash
-@router.callback_query(F.data.startswith("category_"))
-async def process_category(callback: CallbackQuery, state: FSMContext):
-    db = next(get_db())
-    category_id = int(callback.data.split("_")[1])
     
-    category = db.query(Category).filter(Category.id == category_id).first()
-    if not category:
-        await callback.answer("Kategoriya topilmadi!")
+    await message.answer(
+        "🏪 Do'konimizdagi asosiy kategoriyalar:\n\n"
+        "Quyidagi kategoriyalardan birini tanlang:",
+        reply_markup=get_main_categories_keyboard(db)
+    )
+    await state.set_state(UserStates.choosing_main_category)
+
+# Asosiy kategoriya tanlash (Reply)
+@router.message(UserStates.choosing_main_category)
+async def process_main_category(message: Message, state: FSMContext):
+    db = next(get_db())
+    
+    # Orqaga tekshiruvi
+    if message.text == "🏠 Asosiy menyu":
+        await message.answer("Asosiy menyu:", reply_markup=get_main_menu())
+        await state.set_state(UserStates.main_menu)
         return
     
-    # Subkategoriyalarni tekshirish
+    # Kategoriyani topish
+    category = db.query(Category).filter(
+        Category.name == message.text,
+        Category.parent_id == None
+    ).first()
+    
+    if not category:
+        await message.answer("Kategoriya topilmadi! Iltimos, tugmalardan foydalaning.")
+        return
+    
+    # Subkategoriyalarni ko'rsatish
     subcategories = db.query(Category).filter(
-        Category.parent_id == category_id,
+        Category.parent_id == category.id,
         Category.is_active == True
     ).all()
     
-    if subcategories:
-        # Subkategoriyalar mavjud
-        subcat_names = [sub.name for sub in subcategories]
-        subcats_text = "\n".join([f"• {name}" for name in subcat_names])
-        
-        await callback.message.edit_text(
-            f"📁 {category.name} kategoriyasi:\n\n"
-            f"Quyidagi bo'limlardan birini tanlang:\n{subcats_text}",
-            reply_markup=get_categories_keyboard(db, category_id)
-        )
-    else:
-        # Mahsulotlarni ko'rsatish
+    if not subcategories:
+        # Agar subkategoriya yo'q bo'lsa, to'g'ridan-to'g'ri mahsulotlarni ko'rsatamiz
         products = db.query(Product).filter(
-            Product.category_id == category_id,
+            Product.category_id == category.id,
             Product.is_active == True
         ).all()
         
         if products:
+            # Har bir mahsulotni alohida rasm va ma'lumotlari bilan chiqaramiz
+            for product in products:
+                await send_product_with_image(message, product, category.id)
+            
             products_count = len(products)
-            await callback.message.edit_text(
-                f"📦 {category.name} kategoriyasidagi mahsulotlar "
-                f"({products_count} ta):",
-                reply_markup=get_products_keyboard(products, category_id)
+            await message.answer(
+                f"📊 {category.name} kategoriyasida jami {products_count} ta mahsulot mavjud.",
+                reply_markup=get_main_categories_keyboard(db)
             )
-            await state.set_state(UserStates.viewing_products)
+            await state.set_state(UserStates.choosing_main_category)
         else:
-            await callback.answer(
-                f"❌ {category.name} kategoriyasida hali mahsulotlar mavjud emas!", 
-                show_alert=True
+            await message.answer(
+                f"❌ {category.name} kategoriyasida hali mahsulotlar mavjud emas!",
+                reply_markup=get_main_categories_keyboard(db)
             )
+        return
+    
+    # Subkategoriyalar mavjud bo'lsa
+    await state.update_data(main_category_id=category.id, main_category_name=category.name)
+    
+    await message.answer(
+        f"📁 {category.name} kategoriyasi:\n\n"
+        "Quyidagi bo'limlardan birini tanlang:",
+        reply_markup=get_subcategories_keyboard(db, category.id)
+    )
+    await state.set_state(UserStates.choosing_subcategory)
 
-# Mahsulot tanlash
+# Subkategoriya tanlash (Reply) - MAHSULOTLARNI RASMI BILAN KO'RSATISH
+@router.message(UserStates.choosing_subcategory)
+async def process_subcategory(message: Message, state: FSMContext):
+    db = next(get_db())
+    user_data = await state.get_data()
+    main_category_id = user_data.get('main_category_id')
+    
+    # Orqaga tekshiruvi
+    if message.text == "◀️ Orqaga":
+        await show_main_categories(message, state)
+        return
+    
+    if message.text == "🏠 Asosiy menyu":
+        await message.answer("Asosiy menyu:", reply_markup=get_main_menu())
+        await state.set_state(UserStates.main_menu)
+        return
+    
+    # Subkategoriyani topish
+    subcategory = db.query(Category).filter(
+        Category.name == message.text,
+        Category.parent_id == main_category_id
+    ).first()
+    
+    if not subcategory:
+        await message.answer("Bo'lim topilmadi! Iltimos, tugmalardan foydalaning.")
+        return
+    
+    # Subkategoriyadagi mahsulotlarni olish
+    products = db.query(Product).filter(
+        Product.category_id == subcategory.id,
+        Product.is_active == True
+    ).all()
+    
+    if not products:
+        await message.answer(
+            f"❌ {message.text} bo'limida hali mahsulotlar mavjud emas!",
+            reply_markup=get_subcategories_keyboard(db, main_category_id)
+        )
+        return
+    
+    # Har bir mahsulotni alohida rasm va ma'lumotlari bilan chiqaramiz
+    for product in products:
+        await send_product_with_image(message, product, subcategory.id)
+    
+    # Mahsulotlar soni haqida xabar
+    products_count = len(products)
+    await message.answer(
+        f"📊 {message.text} bo'limida jami {products_count} ta mahsulot mavjud.",
+        reply_markup=get_subcategories_keyboard(db, main_category_id)
+    )
+    
+    await state.update_data(subcategory_id=subcategory.id, subcategory_name=message.text)
+
+# Mahsulotni rasm va ma'lumotlari bilan yuborish funksiyasi
+async def send_product_with_image(message, product, category_id):
+    """Mahsulotni rasm va batafsil ma'lumotlari bilan yuboradi"""
+    
+    # Mahsulot ma'lumotlarini tayyorlash
+    product_text = (
+        f"🆔 Mahsulot ID: {product.id}\n"
+        f"📦 {product.name}\n"
+        f"💰 Narxi: {product.price:,.0f} so'm\n"
+        f"📝 {product.description or 'Tavsif mavjud emas'}\n\n"
+    )
+    
+    # Ranglar va razmerlarni ko'rsatish
+    if product.colors:
+        colors_text = ", ".join(product.colors)
+        product_text += f"🎨 Ranglar: {colors_text}\n"
+    
+    if product.sizes:
+        sizes_text = ", ".join(product.sizes)
+        product_text += f"📏 Razmerlar: {sizes_text}\n"
+    
+    product_text += f"\n🛒 Mahsulotni tanlang:"
+    
+    # Mahsulot tanlash uchun keyboard
+    keyboard = get_products_keyboard([product], category_id)
+    
+    # Agar mahsulot rasmi bo'lsa, rasm bilan chiqaramiz
+    if product.image:
+        try:
+            await message.answer_photo(
+                photo=product.image,
+                caption=product_text,
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            # Agar rasm bilan muammo bo'lsa, oddiy xabar
+            await message.answer(
+                f"🖼️ {product_text}",
+                reply_markup=keyboard
+            )
+    else:
+        # Agar rasm bo'lmasa, oddiy xabar
+        await message.answer(
+            product_text,
+            reply_markup=keyboard
+        )
+
+# Mahsulot tanlash (Inline)
 @router.callback_query(F.data.startswith("product_"))
 async def process_product(callback: CallbackQuery, state: FSMContext):
     db = next(get_db())
@@ -95,7 +214,7 @@ async def process_product(callback: CallbackQuery, state: FSMContext):
     colors_text = "\n".join([f"• {color}" for color in (product.colors or [])]) 
     sizes_text = ", ".join(product.sizes or [])
     
-    # Mahsulot ma'lumotlarini chiroyli ko'rsatamiz (ID bilan)
+    # Mahsulot ma'lumotlarini chiroyli ko'rsatamiz
     product_text = (
         f"🆔 Mahsulot ID: {product.id}\n"
         f"🛍 {product.name}\n\n"
@@ -121,7 +240,6 @@ async def process_product(callback: CallbackQuery, state: FSMContext):
                 reply_markup=get_color_selection_keyboard()
             )
         except:
-            # Agar rasm bilan muammo bo'lsa, oddiy xabar yuboramiz
             await callback.message.edit_text(
                 product_text,
                 reply_markup=get_color_selection_keyboard()
@@ -134,7 +252,9 @@ async def process_product(callback: CallbackQuery, state: FSMContext):
     
     await state.set_state(UserStates.choosing_color)
 
-# Rang tanlash
+# ... (qolgan handlerlar o'zgarmaydi - rang tanlash, razmer tanlash, miqdor kiritish)
+
+# Rang tanlash (Inline)
 @router.callback_query(UserStates.choosing_color, F.data.startswith("color_"))
 async def process_color(callback: CallbackQuery, state: FSMContext):
     color_data = callback.data
@@ -181,7 +301,7 @@ async def process_custom_color(message: Message, state: FSMContext):
     )
     await state.set_state(UserStates.choosing_size)
 
-# Razmer tanlash
+# Razmer tanlash (Inline)
 @router.callback_query(UserStates.choosing_size, F.data.startswith("size_"))
 async def process_size(callback: CallbackQuery, state: FSMContext):
     size_data = callback.data
@@ -193,8 +313,6 @@ async def process_size(callback: CallbackQuery, state: FSMContext):
     
     size_name = size_data.split("_")[1]
     await state.update_data(selected_size=size_name)
-    
-    product_data = await state.get_data()
     
     await callback.message.answer(
         f"✅ Razmer tanlandi: {size_name}\n\n"
@@ -232,7 +350,6 @@ async def process_quantity(message: Message, state: FSMContext):
         user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
         
         if not user:
-            # Agar foydalanuvchi bazada yo'q bo'lsa, yangi qo'shamiz
             user = User(
                 telegram_id=message.from_user.id,
                 full_name=message.from_user.full_name
@@ -277,71 +394,51 @@ async def process_quantity(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Iltimos, to'g'ri raqam kiriting!")
 
+# Orqaga qaytish (mahsulotlar ro'yxatidan subkategoriyaga)
+@router.callback_query(F.data.startswith("back_category_"))
+async def back_to_subcategory(callback: CallbackQuery, state: FSMContext):
+    db = next(get_db())
+    category_id = int(callback.data.split("_")[2])
+    
+    category = db.query(Category).filter(Category.id == category_id).first()
+    if category:
+        # Kategoriyaning ota kategoriyasini topamiz
+        parent_category = db.query(Category).filter(Category.id == category.parent_id).first()
+        
+        if parent_category:
+            # Subkategoriyalarga qaytamiz
+            await callback.message.answer(
+                f"📁 {parent_category.name} kategoriyasi:\n\n"
+                "Quyidagi bo'limlardan birini tanlang:",
+                reply_markup=get_subcategories_keyboard(db, parent_category.id)
+            )
+            await state.set_state(UserStates.choosing_subcategory)
+            await state.update_data(main_category_id=parent_category.id)
+
 # Asosiy menyuga qaytish
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
-    # ✅ TUZATILGAN: Yangi xabar yuboramiz
     await callback.message.answer(
         "🏠 Asosiy menyu:",
         reply_markup=get_main_menu()
     )
     await state.set_state(UserStates.main_menu)
 
-# Orqaga qaytish (kategoriya ichida)
-@router.callback_query(F.data.startswith("back_category_"))
-async def back_to_category(callback: CallbackQuery, state: FSMContext):
-    db = next(get_db())
-    category_id = int(callback.data.split("_")[2])
-    
-    category = db.query(Category).filter(Category.id == category_id).first()
-    if category:
-        products = db.query(Product).filter(
-            Product.category_id == category_id,
-            Product.is_active == True
-        ).all()
-        
-        if products:
-            products_count = len(products)
-            await callback.message.edit_text(
-                f"📦 {category.name} kategoriyasidagi mahsulotlar "
-                f"({products_count} ta):",
-                reply_markup=get_products_keyboard(products, category_id)
-            )
-            await state.set_state(UserStates.viewing_products)
-
 # Noto'g'ri harakatlar uchun handlerlar
-@router.message(UserStates.choosing_category)
-async def handle_category_invalid(message: Message):
+@router.message(UserStates.choosing_main_category)
+async def handle_main_category_invalid(message: Message):
     await message.answer("Iltimos, kategoriyani tugma orqali tanlang.")
 
-@router.message(UserStates.viewing_products)
-async def handle_products_invalid(message: Message):
-    await message.answer("Iltimos, mahsulotni tugma orqali tanlang.")
+@router.message(UserStates.choosing_subcategory)
+async def handle_subcategory_invalid(message: Message):
+    await message.answer("Iltimos, bo'limni tugma orqali tanlang.")
 
 @router.message(UserStates.entering_quantity)
-async def handle_quantity_invalid(message: Message, state: FSMContext):
+async def handle_quantity_invalid(message: Message):
     await message.answer("❌ Iltimos, miqdorni raqamda kiriting:")
 
-@router.message(UserStates.choosing_color)
-async def handle_color_invalid(message: Message):
-    await message.answer("Iltimos, rangni tugma orqali tanlang.")
-
-@router.message(UserStates.choosing_size)
-async def handle_size_invalid(message: Message):
-    await message.answer("Iltimos, razmerni tugma orqali tanlang.")
-
-# Kategoriya va mahsulotlar bo'limida noto'g'ri xabarlar
-@router.message(F.text.in_(["🛍 Kategoriya", "🛒 Savat"]))
-async def handle_main_menu_buttons(message: Message, state: FSMContext):
-    if message.text == "🛍 Kategoriya":
-        db = next(get_db())
-        await message.answer(
-            "🏪 Do'konimizdagi kategoriyalar:\n\n"
-            "Quyidagi kategoriyalardan birini tanlang:",
-            reply_markup=get_categories_keyboard(db)
-        )
-        await state.set_state(UserStates.choosing_category)
-    elif message.text == "🛒 Savat":
-        from handlers.cart import show_cart
-        await show_cart(message, state)
-        
+# Savatga o'tish
+@router.message(F.text == "🛒 Savat")
+async def handle_cart_button(message: Message, state: FSMContext):
+    from handlers.cart import show_cart
+    await show_cart(message, state)
