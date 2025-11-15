@@ -52,3 +52,14 @@ def get_payment_types_keyboard():
         ],
         resize_keyboard=True
     )
+
+# ✅ Yangi: Buyurtmani tasdiqlash keyboardi - YANA ANIQROQ
+def get_order_confirmation_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ HA, Tasdiqlayman", callback_data="confirm_order"),
+                InlineKeyboardButton(text="❌ Yo'q, Bekor qilish", callback_data="cancel_order")
+            ]
+        ]
+    )

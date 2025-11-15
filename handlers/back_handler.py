@@ -8,7 +8,8 @@ router = Router()
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    # ✅ TUZATILGAN: Yangi xabar yuboramiz (edit_text o'rniga)
+    await callback.message.answer(
         "Asosiy menyu:",
         reply_markup=get_main_menu()
     )

@@ -8,12 +8,14 @@ from keyboards.admin import (
     get_admin_main_keyboard,
     get_categories_keyboard_admin,
     get_color_selection_keyboard,
-    get_size_selection_keyboard
+    get_size_selection_keyboard,
+    get_broadcast_confirmation_keyboard
 )
 from keyboards.main_menu import get_main_menu
 from utils.states import AdminStates
 from config import ADMIN_IDS
 import json
+import asyncio
 
 router = Router()
 
@@ -35,6 +37,16 @@ async def cmd_admin(message: Message, state: FSMContext):
 async def start_adding_product(message: Message, state: FSMContext):
     await message.answer("Mahsulot nomini kiriting:")
     await state.set_state(AdminStates.adding_product_name)
+
+# ✅ YANGI: Xabar yuborishni boshlash
+@router.message(AdminStates.main_menu, F.text == "📢 Xabar yuborish")
+async def start_broadcasting(message: Message, state: FSMContext):
+    await message.answer(
+        "📢 Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring:\n\n"
+        "ℹ️ Xabar matn, rasm, video yoki boshqa formatda bo'lishi mumkin.",
+        reply_markup=get_main_menu()
+    )
+    await state.set_state(AdminStates.broadcasting_message)
 
 @router.message(AdminStates.main_menu, F.text == "📊 Statistika")
 async def show_statistics(message: Message):
@@ -134,7 +146,7 @@ async def process_product_category(callback: CallbackQuery, state: FSMContext):
     
     if subcategories:
         # Subkategoriyalar mavjud, ularni ko'rsatamiz
-        await callback.message.edit_text(
+        await callback.message.answer(
             f"📁 {category.name} kategoriyasi:\nQuyidagi bo'limlardan birini tanlang:",
             reply_markup=get_categories_keyboard_admin(db, category_id)
         )
@@ -150,7 +162,7 @@ async def process_product_category(callback: CallbackQuery, state: FSMContext):
 # Admin kategoriya menyusidan asosiy menyuga qaytish
 @router.callback_query(AdminStates.adding_product_category, F.data == "admin_back_to_main")
 async def admin_back_to_main(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await callback.message.answer(
         "❌ Mahsulot qo'shish bekor qilindi.",
         reply_markup=get_admin_main_keyboard()
     )
@@ -229,12 +241,8 @@ async def process_product_sizes(callback: CallbackQuery, state: FSMContext):
     await state.update_data(selected_sizes=[size_name])
     
     product_data = await state.get_data()
-    await callback.message.answer(
-        f"✅ Razmer tanlandi: {size_name}\n\n"
-        f"Mahsulot muvaffaqiyatli qo'shildi!"
-    )
     
-    # Mahsulotni bazaga qo'shish (min_quantity siz)
+    # Mahsulotni bazaga qo'shish
     db = next(get_db())
     product = Product(
         name=product_data['product_name'],
@@ -280,7 +288,7 @@ async def process_custom_size(message: Message, state: FSMContext):
     
     product_data = await state.get_data()
     
-    # Mahsulotni bazaga qo'shish (min_quantity siz)
+    # Mahsulotni bazaga qo'shish
     db = next(get_db())
     product = Product(
         name=product_data['product_name'],
@@ -311,6 +319,125 @@ async def process_custom_size(message: Message, state: FSMContext):
             f"🎨 Ranglar: {colors_text}\n"
             f"📏 Razmerlar: {sizes_text}"
         ),
+        reply_markup=get_admin_main_keyboard()
+    )
+    await state.set_state(AdminStates.main_menu)
+
+# ✅ YANGI: Xabarni qabul qilish va tasdiqlash
+@router.message(AdminStates.broadcasting_message)
+async def process_broadcast_message(message: Message, state: FSMContext):
+    # Xabarni saqlaymiz
+    await state.update_data(
+        broadcast_message=message.text if message.text else "",
+        broadcast_photo=message.photo[-1].file_id if message.photo else None,
+        broadcast_content_type=message.content_type
+    )
+    
+    # Foydalanuvchilar sonini hisoblaymiz
+    db = next(get_db())
+    total_users = db.query(User).count()
+    
+    # Tasdiqlash xabarini tayyorlaymiz
+    confirmation_text = f"📊 Xabar {total_users} ta foydalanuvchiga yuboriladi.\n\n"
+    
+    if message.text:
+        confirmation_text += f"📝 Xabar matni:\n{message.text}\n\n"
+    elif message.photo:
+        confirmation_text += "🖼️ Xabar rasmi bilan yuboriladi.\n\n"
+    elif message.video:
+        confirmation_text += "🎥 Xabar video bilan yuboriladi.\n\n"
+    else:
+        confirmation_text += f"📎 Xabar turi: {message.content_type}\n\n"
+    
+    confirmation_text += "Xabarni yuborishni tasdiqlaysizmi?"
+    
+    if message.photo:
+        # Agar rasm bo'lsa, rasm bilan tasdiqlash xabarini yuboramiz
+        await message.answer_photo(
+            photo=message.photo[-1].file_id,
+            caption=confirmation_text,
+            reply_markup=get_broadcast_confirmation_keyboard()
+        )
+    else:
+        # Agar oddiy matn bo'lsa
+        await message.answer(
+            confirmation_text,
+            reply_markup=get_broadcast_confirmation_keyboard()
+        )
+    
+    await state.set_state(AdminStates.confirming_broadcast)
+
+# ✅ YANGI: Xabarni tasdiqlash
+@router.callback_query(AdminStates.confirming_broadcast, F.data == "confirm_broadcast")
+async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer("Xabar yuborilmoqda...")
+    
+    db = next(get_db())
+    user_data = await state.get_data()
+    users = db.query(User).all()
+    
+    total_users = len(users)
+    successful_sends = 0
+    failed_sends = 0
+    
+    # Progress xabarini yuboramiz
+    progress_message = await callback.message.answer(f"📤 Xabar yuborilmoqda... 0/{total_users}")
+    
+    # Har bir foydalanuvchiga xabarni yuboramiz
+    for i, user in enumerate(users, 1):
+        try:
+            if user_data.get('broadcast_photo'):
+                # Rasm bilan xabar
+                await bot.send_photo(
+                    chat_id=user.telegram_id,
+                    photo=user_data['broadcast_photo'],
+                    caption=user_data.get('broadcast_message', ''),
+                    parse_mode="HTML"
+                )
+            else:
+                # Oddiy matn xabar
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=user_data.get('broadcast_message', ''),
+                    parse_mode="HTML"
+                )
+            successful_sends += 1
+        except Exception as e:
+            print(f"Foydalanuvchi {user.telegram_id} ga xabar yuborishda xatolik: {e}")
+            failed_sends += 1
+        
+        # Har 10 ta yuborilganda progress yangilaymiz
+        if i % 10 == 0 or i == total_users:
+            try:
+                await progress_message.edit_text(
+                    f"📤 Xabar yuborilmoqda... {i}/{total_users}\n"
+                    f"✅ Muvaffaqiyatli: {successful_sends}\n"
+                    f"❌ Xatolar: {failed_sends}"
+                )
+            except:
+                pass
+        
+        # Serverga yuklamaslik uchun kichik pauza
+        await asyncio.sleep(0.1)
+    
+    # Yakuniy xabar
+    result_text = (
+        f"✅ Xabar yuborish yakunlandi!\n\n"
+        f"📊 Natijalar:\n"
+        f"• Jami foydalanuvchilar: {total_users}\n"
+        f"• Muvaffaqiyatli yuborildi: {successful_sends}\n"
+        f"• Yuborilmadi: {failed_sends}"
+    )
+    
+    await callback.message.answer(result_text, reply_markup=get_admin_main_keyboard())
+    await state.set_state(AdminStates.main_menu)
+
+# ✅ YANGI: Xabarni bekor qilish
+@router.callback_query(AdminStates.confirming_broadcast, F.data == "cancel_broadcast")
+async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Xabar yuborish bekor qilindi")
+    await callback.message.answer(
+        "❌ Xabar yuborish bekor qilindi.",
         reply_markup=get_admin_main_keyboard()
     )
     await state.set_state(AdminStates.main_menu)
@@ -347,4 +474,3 @@ async def process_admin_unknown(message: Message):
         "Iltimos, quyidagi tugmalardan foydalaning:",
         reply_markup=get_admin_main_keyboard()
     )
-    

@@ -1,7 +1,6 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class UserStates(StatesGroup):
-    # waiting_for_subscription = State()  # ❌ Bu state kerak emas
     main_menu = State()
     choosing_category = State()
     choosing_subcategory = State()
@@ -14,6 +13,7 @@ class UserStates(StatesGroup):
     ordering_phone = State()
     ordering_location = State()
     ordering_payment = State()
+    ordering_confirmation = State()
     choosing_custom_color = State()
     choosing_custom_size = State()
 
@@ -29,3 +29,6 @@ class AdminStates(StatesGroup):
     adding_product_min_quantity = State()
     adding_custom_color = State()
     adding_custom_size = State()
+    # ✅ Yangi: Xabar yuborish holatlari
+    broadcasting_message = State()
+    confirming_broadcast = State()  

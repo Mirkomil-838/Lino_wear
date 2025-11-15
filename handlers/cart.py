@@ -7,11 +7,12 @@ from keyboards.cart import (
     get_cart_keyboard, 
     get_phone_keyboard, 
     get_location_keyboard,
-    get_payment_types_keyboard
+    get_payment_types_keyboard,
+    get_order_confirmation_keyboard
 )
 from keyboards.main_menu import get_main_menu
 from utils.states import UserStates
-from config import PAYMENT_TYPES, ADMIN_IDS
+from config import PAYMENT_TYPES, ADMIN_IDS, DELIVERY_PRICE
 
 router = Router()
 
@@ -38,7 +39,9 @@ async def show_cart(message: Message, state: FSMContext):
         cart_text += f"   Miqdor: {item.quantity} ta\n"
         cart_text += f"   Narx: {item_total:,.0f} so'm\n\n"
     
-    cart_text += f"💰 Jami: {total:,.0f} so'm"
+    cart_text += f"💰 Mahsulotlar jami: {total:,.0f} so'm\n"
+    cart_text += f"🚚 Yetkazib berish: {DELIVERY_PRICE:,.0f} so'm\n"
+    cart_text += f"💵 Umumiy summa: {total + DELIVERY_PRICE:,.0f} so'm"
     
     await message.answer(cart_text, reply_markup=get_cart_keyboard(cart_items))
     await state.set_state(UserStates.cart)
@@ -53,6 +56,7 @@ async def remove_from_cart(callback: CallbackQuery, state: FSMContext):
         db.delete(cart_item)
         db.commit()
         await callback.answer("Mahsulot savatdan olib tashlandi!")
+        # Yangi xabar yuboramiz
         await show_cart(callback.message, state)
     else:
         await callback.answer("Mahsulot topilmadi!")
@@ -88,7 +92,7 @@ async def process_location(message: Message, state: FSMContext):
     await state.set_state(UserStates.ordering_payment)
 
 @router.message(UserStates.ordering_payment, F.text.in_(PAYMENT_TYPES))
-async def process_payment(message: Message, state: FSMContext, bot: Bot):
+async def process_payment(message: Message, state: FSMContext):
     db = next(get_db())
     user_data = await state.get_data()
     user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
@@ -100,62 +104,141 @@ async def process_payment(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Savatda mahsulotlar mavjud emas!")
         return
     
-    # Buyurtma yaratish
-    total_amount = sum(item.product.price * item.quantity for item in cart_items)
+    # Umumiy summani hisoblash (yetkazib berish narxi bilan)
+    products_total = sum(item.product.price * item.quantity for item in cart_items)
+    total_amount = products_total + DELIVERY_PRICE
     
-    order_items = []
-    for item in cart_items:
-        order_items.append({
-            'product_id': item.product.id,  # ✅ Mahsulot ID qo'shildi
+    # Buyurtma ma'lumotlarini saqlash
+    await state.update_data(
+        payment_type=message.text,
+        cart_items=[{
+            'product_id': item.product.id,
             'product_name': item.product.name,
             'color': item.color,
             'size': item.size,
             'quantity': item.quantity,
             'price': item.product.price
-        })
-    
-    order = Order(
-        user_id=user.id,
-        items=order_items,
-        total_amount=total_amount,
-        phone=user_data['phone'],
-        location=user_data['location'],
-        payment_type=message.text
+        } for item in cart_items],
+        products_total=products_total,
+        total_amount=total_amount
     )
     
-    db.add(order)
-    
-    # Savatni tozalash
-    db.query(CartItem).filter(CartItem.user_id == user.id).delete()
-    db.commit()
-    
-    # Adminlarga xabar yuborish (MAHSULOT ID BILAN)
-    order_text = "🛒 YANGI BUYURTMA!\n\n"
+    # Buyurtma tasdiqlash xabarini tayyorlash
+    order_text = "📋 BUYURTMA MA'LUMOTLARI:\n\n"
     order_text += f"👤 Mijoz: {user.full_name}\n"
     order_text += f"📞 Telefon: {user_data['phone']}\n"
     order_text += f"📍 Manzil: {user_data['location']}\n"
     order_text += f"💳 To'lov turi: {message.text}\n\n"
+    
     order_text += "📦 Mahsulotlar:\n"
+    for item in cart_items:
+        item_total = item.product.price * item.quantity
+        order_text += f"🆔 {item.product.id} | {item.product.name}\n"
+        order_text += f"   Rang: {item.color}, Razmer: {item.size}\n"
+        order_text += f"   Miqdor: {item.quantity} ta\n"
+        order_text += f"   Narx: {item_total:,.0f} so'm\n\n"
     
-    for item in order_items:
-        order_text += f"🆔 Mahsulot ID: {item['product_id']}\n"
-        order_text += f"📦 Nomi: {item['product_name']}\n"
-        order_text += f"   Rang: {item['color']}, Razmer: {item['size']}\n"
-        order_text += f"   Miqdor: {item['quantity']} ta\n"
-        order_text += f"   Narx: {item['price']:,.0f} so'm\n\n"
+    order_text += f"💰 Mahsulotlar jami: {products_total:,.0f} so'm\n"
+    order_text += f"🚚 Yetkazib berish: {DELIVERY_PRICE:,.0f} so'm\n"
+    order_text += f"💵 Umumiy summa: {total_amount:,.0f} so'm\n\n"
     
-    order_text += f"💰 Jami: {total_amount:,.0f} so'm"
+    order_text += "⚠️ DIQQAT: Yetkazib berish narxi buyurtma summasi bilan birga to'lanadi.\n"
+    order_text += "Buyurtmani tasdiqlaysizmi?"
     
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, order_text)
-        except Exception as e:
-            print(f"Adminga xabar yuborishda xatolik: {e}")
-    
+    # Yangi xabar yuboramiz
     await message.answer(
-        "✅ Buyurtmangiz qabul qilindi! Tez orada siz bilan bog'lanamiz.",
+        order_text,
+        reply_markup=get_order_confirmation_keyboard()
+    )
+    await state.set_state(UserStates.ordering_confirmation)
+
+# ✅ TO'LIQ TUZATILGAN: Buyurtmani tasdiqlash
+@router.callback_query(UserStates.ordering_confirmation, F.data == "confirm_order")
+async def confirm_order(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    try:
+        db = next(get_db())
+        user_data = await state.get_data()
+        user = db.query(User).filter(User.telegram_id == callback.from_user.id).first()
+        
+        # Buyurtma yaratish
+        order = Order(
+            user_id=user.id,
+            items=user_data['cart_items'],
+            total_amount=user_data['total_amount'],
+            phone=user_data['phone'],
+            location=user_data['location'],
+            payment_type=user_data['payment_type']
+        )
+        
+        db.add(order)
+        
+        # Savatni tozalash
+        db.query(CartItem).filter(CartItem.user_id == user.id).delete()
+        db.commit()
+        
+        # Adminlarga xabar yuborish
+        order_text = "🛒 YANGI BUYURTMA!\n\n"
+        order_text += f"👤 Mijoz: {user.full_name}\n"
+        order_text += f"📞 Telefon: {user_data['phone']}\n"
+        order_text += f"📍 Manzil: {user_data['location']}\n"
+        order_text += f"💳 To'lov turi: {user_data['payment_type']}\n\n"
+        order_text += "📦 Mahsulotlar:\n"
+        
+        for item in user_data['cart_items']:
+            item_total = item['price'] * item['quantity']
+            order_text += f"🆔 Mahsulot ID: {item['product_id']}\n"
+            order_text += f"📦 Nomi: {item['product_name']}\n"
+            order_text += f"   Rang: {item['color']}, Razmer: {item['size']}\n"
+            order_text += f"   Miqdor: {item['quantity']} ta\n"
+            order_text += f"   Narx: {item_total:,.0f} so'm\n\n"
+        
+        order_text += f"💰 Mahsulotlar jami: {user_data['products_total']:,.0f} so'm\n"
+        order_text += f"🚚 Yetkazib berish: {DELIVERY_PRICE:,.0f} so'm\n"
+        order_text += f"💵 Umumiy summa: {user_data['total_amount']:,.0f} so'm"
+        
+        # Adminlarga xabar yuborishda xatoliklarni ushlaymiz
+        successful_admins = 0
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, order_text)
+                successful_admins += 1
+                print(f"✅ Xabar admin {admin_id} ga yuborildi")
+            except Exception as e:
+                print(f"❌ Admin {admin_id} ga xabar yuborishda xatolik: {e}")
+        
+        print(f"📊 Jami {successful_admins}/{len(ADMIN_IDS)} adminlarga xabar yuborildi")
+        
+        # ✅ MIJOZGA YANGI XABAR YUBORAMIZ (EDIT_TEXT EMAS)
+        success_text = (
+            "✅ Buyurtmangiz qabul qilindi! Tez orada siz bilan bog'lanamiz.\n\n"
+            f"💵 Jami to'lov: {user_data['total_amount']:,.0f} so'm\n"
+            f"(shu jumladan yetkazib berish {DELIVERY_PRICE:,.0f} so'm)\n\n"
+            f"📞 Telefon: {user_data['phone']}\n"
+            f"📍 Manzil: {user_data['location']}\n"
+            f"💳 To'lov turi: {user_data['payment_type']}"
+        )
+        
+        await callback.answer("✅ Buyurtmangiz qabul qilindi!", show_alert=False)
+        await callback.message.answer(success_text, reply_markup=get_main_menu())
+        
+    except Exception as e:
+        print(f"Buyurtma yaratishda xatolik: {e}")
+        await callback.answer("❌ Xatolik yuz berdi. Iltimos qayta urinib ko'ring.", show_alert=True)
+        return
+    
+    await state.set_state(UserStates.main_menu)
+
+# ✅ TO'LIQ TUZATILGAN: Buyurtmani bekor qilish
+@router.callback_query(UserStates.ordering_confirmation, F.data == "cancel_order")
+async def cancel_order(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("❌ Buyurtma bekor qilindi", show_alert=False)
+    
+    # Yangi xabar yuboramiz
+    await callback.message.answer(
+        "❌ Buyurtma bekor qilindi.",
         reply_markup=get_main_menu()
     )
+    
     await state.set_state(UserStates.main_menu)
 
 @router.message(UserStates.ordering_payment, F.text == "◀️ Ortga")

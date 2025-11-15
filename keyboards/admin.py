@@ -7,14 +7,28 @@ def get_admin_main_keyboard():
         keyboard=[
             [
                 KeyboardButton(text="📦 Mahsulot qo'shish"), 
-                KeyboardButton(text="📊 Statistika")
+                KeyboardButton(text="📢 Xabar yuborish")
             ],
             [
+                KeyboardButton(text="📊 Statistika"),
                 KeyboardButton(text="🏠 Asosiy menyu")
             ]
         ],
         resize_keyboard=True
     )
+
+# ✅ Yangi: Xabar yuborish tasdiqlash keyboardi
+def get_broadcast_confirmation_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Xabarni yuborish", callback_data="confirm_broadcast"),
+                InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_broadcast")
+            ]
+        ]
+    )
+
+# ... (qolgan funksiyalar o'zgarishsiz)
 
 def get_categories_keyboard_admin(db: Session, parent_id=None):
     categories = db.query(Category).filter(
@@ -50,9 +64,9 @@ def get_categories_keyboard_admin(db: Session, parent_id=None):
                 callback_data=f"admin_category_{parent_category.parent_id}"
             )])
         else:
-            # Asosiy kategoriyadan asosiy menyuga qaytish
+            # Asosiy kategoriyadan admin menyusiga qaytish
             keyboard.append([InlineKeyboardButton(
-                text="◀️ Asosiy menyu",
+                text="◀️ Admin menyusi",
                 callback_data="admin_back_to_main"
             )])
     else:
@@ -77,7 +91,10 @@ def get_color_selection_keyboard():
                 InlineKeyboardButton(text="⬛ Qora", callback_data="color_black"),
                 InlineKeyboardButton(text="🟨 Sariq", callback_data="color_yellow")
             ],
-            [InlineKeyboardButton(text="✏️ Boshqa rang", callback_data="color_custom")]
+            [
+                InlineKeyboardButton(text="✏️ Boshqa rang", callback_data="color_custom"),
+                InlineKeyboardButton(text="◀️ Orqaga", callback_data="cancel_selection")
+            ]
         ]
     )
 
@@ -94,6 +111,9 @@ def get_size_selection_keyboard():
     if row:
         keyboard.append(row)
     
-    keyboard.append([InlineKeyboardButton(text="✏️ Boshqa razmer", callback_data="size_custom")])
+    keyboard.append([
+        InlineKeyboardButton(text="✏️ Boshqa razmer", callback_data="size_custom"),
+        InlineKeyboardButton(text="◀️ Orqaga", callback_data="cancel_selection")
+    ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
