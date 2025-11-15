@@ -9,7 +9,11 @@ from keyboards.admin import (
     get_categories_keyboard_admin,
     get_color_selection_keyboard,
     get_size_selection_keyboard,
-    get_broadcast_confirmation_keyboard
+    get_broadcast_confirmation_keyboard,
+    get_products_management_keyboard,
+    get_products_list_keyboard,
+    get_product_delete_confirmation_keyboard,
+    get_product_details_keyboard
 )
 from keyboards.main_menu import get_main_menu
 from utils.states import AdminStates
@@ -38,7 +42,17 @@ async def start_adding_product(message: Message, state: FSMContext):
     await message.answer("Mahsulot nomini kiriting:")
     await state.set_state(AdminStates.adding_product_name)
 
-# ✅ YANGI: Xabar yuborishni boshlash
+# Mahsulotlarni boshqarishni boshlash
+@router.message(AdminStates.main_menu, F.text == "🗑️ Mahsulotlarni boshqarish")
+async def start_products_management(message: Message, state: FSMContext):
+    await message.answer(
+        "📦 Mahsulotlarni boshqarish paneli:\n\n"
+        "Quyidagi amallardan birini tanlang:",
+        reply_markup=get_products_management_keyboard()
+    )
+    await state.set_state(AdminStates.managing_products)
+
+# Xabar yuborishni boshlash
 @router.message(AdminStates.main_menu, F.text == "📢 Xabar yuborish")
 async def start_broadcasting(message: Message, state: FSMContext):
     await message.answer(
@@ -323,7 +337,232 @@ async def process_custom_size(message: Message, state: FSMContext):
     )
     await state.set_state(AdminStates.main_menu)
 
-# ✅ YANGI: Xabarni qabul qilish va tasdiqlash
+# Mahsulotlar ro'yxatini ko'rsatish
+@router.message(AdminStates.managing_products, F.text == "📋 Mahsulotlar ro'yxati")
+async def show_products_list(message: Message, state: FSMContext):
+    db = next(get_db())
+    products = db.query(Product).filter(Product.is_active == True).order_by(Product.id).all()
+    
+    if not products:
+        await message.answer(
+            "❌ Hozircha mahsulotlar mavjud emas.",
+            reply_markup=get_products_management_keyboard()
+        )
+        return
+    
+    total_products = len(products)
+    await message.answer(
+        f"📦 Barcha mahsulotlar ({total_products} ta):\n\n"
+        "Mahsulotni tanlang batafsil ma'lumot va o'chirish uchun:",
+        reply_markup=get_products_list_keyboard(products)
+    )
+
+# Mahsulot o'chirishni boshlash
+@router.message(AdminStates.managing_products, F.text == "❌ Mahsulot o'chirish")
+async def start_deleting_product(message: Message, state: FSMContext):
+    db = next(get_db())
+    products = db.query(Product).filter(Product.is_active == True).order_by(Product.id).all()
+    
+    if not products:
+        await message.answer(
+            "❌ O'chirish uchun mahsulotlar mavjud emas.",
+            reply_markup=get_products_management_keyboard()
+        )
+        return
+    
+    total_products = len(products)
+    await message.answer(
+        f"🗑️ Mahsulot o'chirish:\n\n"
+        f"O'chirmoqchi bo'lgan mahsulotni tanlang ({total_products} ta mahsulot mavjud):",
+        reply_markup=get_products_list_keyboard(products)
+    )
+
+# Mahsulotni ko'rsatish (batafsil ma'lumot)
+@router.callback_query(F.data.startswith("view_product_"))
+async def view_product_details(callback: CallbackQuery, state: FSMContext):
+    db = next(get_db())
+    product_id = int(callback.data.split("_")[2])
+    
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        await callback.answer("Mahsulot topilmadi!")
+        return
+    
+    # Kategoriya nomini olish
+    category_name = "Noma'lum"
+    if product.category:
+        category_name = product.category.name
+    
+    # Mahsulot ma'lumotlarini tayyorlash
+    product_text = (
+        f"📦 MAHSULOT MA'LUMOTLARI\n\n"
+        f"🆔 ID: {product.id}\n"
+        f"📦 Nomi: {product.name}\n"
+        f"📝 Tavsifi: {product.description or 'Mavjud emas'}\n"
+        f"💰 Narxi: {product.price:,.0f} so'm\n"
+        f"📁 Kategoriya: {category_name}\n"
+        f"🎨 Ranglar: {', '.join(product.colors or [])}\n"
+        f"📏 Razmerlar: {', '.join(product.sizes or [])}\n"
+        f"📅 Qo'shilgan sana: {product.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        f"🔰 Holati: {'🟢 Faol' if product.is_active else '🔴 Nofaol'}"
+    )
+    
+    if product.image:
+        try:
+            await callback.message.answer_photo(
+                photo=product.image,
+                caption=product_text,
+                reply_markup=get_product_details_keyboard(product.id)
+            )
+        except:
+            await callback.message.answer(
+                product_text,
+                reply_markup=get_product_details_keyboard(product.id)
+            )
+    else:
+        await callback.message.answer(
+            product_text,
+            reply_markup=get_product_details_keyboard(product.id)
+        )
+    
+    await callback.answer()
+
+# Mahsulotni o'chirish uchun tanlash
+@router.callback_query(F.data.startswith("delete_product_"))
+async def select_product_for_deletion(callback: CallbackQuery, state: FSMContext):
+    db = next(get_db())
+    product_id = int(callback.data.split("_")[2])
+    
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        await callback.answer("Mahsulot topilmadi!")
+        return
+    
+    # Tasdiqlash xabarini yuboramiz
+    confirmation_text = (
+        f"⚠️ MAHSULOT O'CHIRISH\n\n"
+        f"🆔 ID: {product.id}\n"
+        f"📦 Nomi: {product.name}\n"
+        f"💰 Narxi: {product.price:,.0f} so'm\n\n"
+        f"❌ Ushbu mahsulotni rostdan ham o'chirmoqchimisiz?\n"
+        f"Bu amalni qaytarib bo'lmaydi!"
+    )
+    
+    if product.image:
+        try:
+            await callback.message.answer_photo(
+                photo=product.image,
+                caption=confirmation_text,
+                reply_markup=get_product_delete_confirmation_keyboard(product.id)
+            )
+        except:
+            await callback.message.answer(
+                confirmation_text,
+                reply_markup=get_product_delete_confirmation_keyboard(product.id)
+            )
+    else:
+        await callback.message.answer(
+            confirmation_text,
+            reply_markup=get_product_delete_confirmation_keyboard(product.id)
+        )
+    
+    await callback.answer()
+
+# Mahsulotni o'chirishni tasdiqlash
+@router.callback_query(F.data.startswith("confirm_delete_"))
+async def confirm_product_deletion(callback: CallbackQuery, state: FSMContext):
+    db = next(get_db())
+    product_id = int(callback.data.split("_")[2])
+    
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        await callback.answer("Mahsulot topilmadi!")
+        return
+    
+    # Mahsulot nomini saqlab qo'yamiz (o'chirilgandan keyin ko'rsatish uchun)
+    product_name = product.name
+    
+    # Mahsulotni o'chiramiz
+    db.delete(product)
+    db.commit()
+    
+    await callback.answer(f"✅ \"{product_name}\" mahsuloti o'chirildi!")
+    
+    # Yangi mahsulotlar ro'yxatini ko'rsatamiz
+    products = db.query(Product).filter(Product.is_active == True).order_by(Product.id).all()
+    
+    if products:
+        await callback.message.answer(
+            f"✅ Mahsulot muvaffaqiyatli o'chirildi!\n\n"
+            f"Qolgan mahsulotlar ({len(products)} ta):",
+            reply_markup=get_products_list_keyboard(products)
+        )
+    else:
+        await callback.message.answer(
+            "✅ Mahsulot muvaffaqiyatli o'chirildi!\n\n"
+            "❌ Boshqa mahsulotlar qolmadi.",
+            reply_markup=get_products_management_keyboard()
+        )
+
+# O'chirishni bekor qilish
+@router.callback_query(F.data == "cancel_delete")
+async def cancel_deletion(callback: CallbackQuery):
+    await callback.answer("O'chirish bekor qilindi")
+    await callback.message.answer(
+        "❌ Mahsulot o'chirish bekor qilindi.",
+        reply_markup=get_products_management_keyboard()
+    )
+
+# Sahifa navigatsiyasi
+@router.callback_query(F.data.startswith("products_page_"))
+async def navigate_products_page(callback: CallbackQuery):
+    db = next(get_db())
+    page = int(callback.data.split("_")[2])
+    
+    products = db.query(Product).filter(Product.is_active == True).order_by(Product.id).all()
+    
+    await callback.message.edit_reply_markup(
+        reply_markup=get_products_list_keyboard(products, page)
+    )
+    await callback.answer()
+
+# Boshqarish paneliga qaytish
+@router.callback_query(F.data == "back_to_management")
+async def back_to_management(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "📦 Mahsulotlarni boshqarish paneli:",
+        reply_markup=get_products_management_keyboard()
+    )
+    await callback.answer()
+
+# Mahsulotlar ro'yxatiga qaytish
+@router.callback_query(F.data == "back_to_products_list")
+async def back_to_products_list(callback: CallbackQuery):
+    db = next(get_db())
+    products = db.query(Product).filter(Product.is_active == True).order_by(Product.id).all()
+    
+    if products:
+        await callback.message.answer(
+            f"📦 Barcha mahsulotlar ({len(products)} ta):",
+            reply_markup=get_products_list_keyboard(products)
+        )
+    else:
+        await callback.message.answer(
+            "❌ Hozircha mahsulotlar mavjud emas.",
+            reply_markup=get_products_management_keyboard()
+        )
+    await callback.answer()
+
+# Orqaga qaytish (boshqarish panelidan admin menyusiga)
+@router.message(AdminStates.managing_products, F.text == "◀️ Orqaga")
+async def back_to_admin_main_from_management(message: Message, state: FSMContext):
+    await message.answer(
+        "👨‍💼 Admin paneliga xush kelibsiz!",
+        reply_markup=get_admin_main_keyboard()
+    )
+    await state.set_state(AdminStates.main_menu)
+
+# Xabarni qabul qilish va tasdiqlash
 @router.message(AdminStates.broadcasting_message)
 async def process_broadcast_message(message: Message, state: FSMContext):
     # Xabarni saqlaymiz
@@ -367,7 +606,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     
     await state.set_state(AdminStates.confirming_broadcast)
 
-# ✅ YANGI: Xabarni tasdiqlash
+# Xabarni tasdiqlash
 @router.callback_query(AdminStates.confirming_broadcast, F.data == "confirm_broadcast")
 async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer("Xabar yuborilmoqda...")
@@ -432,7 +671,7 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot
     await callback.message.answer(result_text, reply_markup=get_admin_main_keyboard())
     await state.set_state(AdminStates.main_menu)
 
-# ✅ YANGI: Xabarni bekor qilish
+# Xabarni bekor qilish
 @router.callback_query(AdminStates.confirming_broadcast, F.data == "cancel_broadcast")
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Xabar yuborish bekor qilindi")

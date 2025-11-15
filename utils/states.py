@@ -29,6 +29,8 @@ class AdminStates(StatesGroup):
     adding_product_min_quantity = State()
     adding_custom_color = State()
     adding_custom_size = State()
-    # ✅ Yangi: Xabar yuborish holatlari
     broadcasting_message = State()
-    confirming_broadcast = State()  
+    confirming_broadcast = State()
+    # ✅ Yangi: Mahsulotlarni boshqarish
+    managing_products = State()
+    deleting_product = State()
